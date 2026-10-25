@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: #131314;
+    color: #e3e3e3;
+    overflow-x: hidden;
+  }
+  
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+}
+
+/* Gemini iridescent gradient utility */
+.gemini-gradient-text {
+  background: linear-gradient(74deg, #4da3ff 0%, #a777e3 40%, #e06277 80%, #ff9e7d 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gemini-border-glow {
+  border: 1px solid rgba(155, 114, 207, 0.25);
+  box-shadow: 0 0 15px rgba(100, 140, 255, 0.08);
+}
+
+/* Custom sleek scrollbar matching Gemini dark theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #37393b;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #505255;
+}

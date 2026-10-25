@@ -1,0 +1,6 @@
+{
+  "name": "Personal AI Messaging Assistant",
+  "description": "A privacy-first AI messaging assistant prototype for Android SMS and WhatsApp featuring modular classification, multi-mode automation safeguards, human-in-the-loop review, and architecture evaluation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
