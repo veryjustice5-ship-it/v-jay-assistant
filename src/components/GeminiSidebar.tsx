@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Zap,
   CheckCircle2,
+  ShieldCheck,
   X
 } from 'lucide-react';
 import { GeminiSparkle } from './GeminiSparkle';
@@ -191,8 +192,23 @@ export const GeminiSidebar: React.FC<GeminiSidebarProps> = ({
           </div>
         </div>
 
-        {/* Bottom Navigation (Settings, Activity, Feasibility) */}
+        {/* Bottom Navigation (Settings, Activity, Feasibility, E2E Tests) */}
         <div className="p-3 border-t border-[#2d2f31] space-y-1">
+          <button
+            onClick={() => {
+              onSelectView('device-tests');
+              if (window.innerWidth < 1024) onClose();
+            }}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-colors ${
+              activeView === 'device-tests'
+                ? 'bg-[#282a2c] text-[#a8c7fa] font-medium'
+                : 'text-[#c4c7c5] hover:bg-[#282a2c] hover:text-[#e3e3e3]'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4 text-[#81c995]" />
+            <span className="font-semibold text-[#e3e3e3]">Companion &amp; E2E Tests</span>
+          </button>
+
           <button
             onClick={() => {
               onSelectView('settings');
@@ -205,7 +221,7 @@ export const GeminiSidebar: React.FC<GeminiSidebarProps> = ({
             }`}
           >
             <Sliders className="w-4 h-4 text-[#8e918f]" />
-            <span>Safeguards & Rules</span>
+            <span>Safeguards &amp; Rules</span>
           </button>
 
           <button

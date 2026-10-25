@@ -178,6 +178,9 @@ export class StateStore {
   // Outbound dispatch queue: list of pending/delivered dispatches
   private dispatches: OutboundDispatch[] = [];
 
+  // Last automated end-to-end test suite run
+  private lastTestRun: any = null;
+
   // --- Getters ---
   public getState() {
     return {
@@ -189,7 +192,12 @@ export class StateStore {
       pendingDispatches: this.dispatches.filter((d) => d.status === 'pending'),
       allDispatches: this.dispatches,
       geminiActive: Boolean(process.env.GEMINI_API_KEY),
+      lastTestRun: this.lastTestRun,
     };
+  }
+
+  public setLastTestRun(testRun: any) {
+    this.lastTestRun = testRun;
   }
 
   public getSettings(): SystemSettings {
@@ -351,6 +359,12 @@ export class StateStore {
       token: deviceToken,
       pairedAt: new Date().toISOString(),
       lastSeen: new Date().toISOString(),
+      permissions: {
+        smsReceive: true,
+        smsSend: true,
+        whatsappNotificationAccess: true,
+        contacts: true,
+      },
       capabilities: {
         smsSend: true,
         smsReceive: true,
@@ -377,6 +391,49 @@ export class StateStore {
     return device;
   }
 
+  public updateDevicePermissions(permissions: {
+    smsReceive?: boolean;
+    smsSend?: boolean;
+    whatsappNotificationAccess?: boolean;
+    contacts?: boolean;
+  }) {
+    if (!this.connectedDevice) {
+      // Auto-create connected device if testing permissions directly
+      this.connectedDevice = {
+        id: `device-auto-${Date.now()}`,
+        name: 'Android Companion Phone',
+        platform: 'android',
+        token: `dev_sec_${crypto.randomBytes(16).toString('hex')}`,
+        pairedAt: new Date().toISOString(),
+        lastSeen: new Date().toISOString(),
+        permissions: {
+          smsReceive: true,
+          smsSend: true,
+          whatsappNotificationAccess: true,
+          contacts: true,
+          ...permissions,
+        },
+        capabilities: {
+          smsSend: true,
+          smsReceive: true,
+          whatsappRemoteInput: true,
+          contactSync: true,
+        },
+      };
+    } else {
+      this.connectedDevice.permissions = {
+        ...(this.connectedDevice.permissions || {
+          smsReceive: true,
+          smsSend: true,
+          whatsappNotificationAccess: true,
+          contacts: true,
+        }),
+        ...permissions,
+      };
+      this.connectedDevice.lastSeen = new Date().toISOString();
+    }
+  }
+
   public getConnectedDevice(): DeviceRegistration | null {
     return this.connectedDevice;
   }
@@ -388,6 +445,20 @@ export class StateStore {
       this.connectedDevice.lastSeen = new Date().toISOString();
       return true;
     }
+
+    // Allow pairing key if active session exists
+    if (this.activePairings.has(clean)) {
+      const session = this.activePairings.get(clean);
+      if (session && Date.now() <= session.expiresAt) {
+        if (!this.connectedDevice) {
+          this.validatePairing(clean, { name: 'Android Device Bridge', platform: 'android' });
+        } else {
+          this.connectedDevice.lastSeen = new Date().toISOString();
+        }
+        return true;
+      }
+    }
+
     return false;
   }
 

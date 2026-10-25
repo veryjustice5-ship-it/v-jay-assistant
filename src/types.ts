@@ -152,6 +152,13 @@ export interface OutboundDispatch {
   error?: string;
 }
 
+export interface DevicePermissions {
+  smsReceive: boolean;
+  smsSend: boolean;
+  whatsappNotificationAccess: boolean;
+  contacts: boolean;
+}
+
 export interface DeviceRegistration {
   id: string;
   name: string;
@@ -159,6 +166,7 @@ export interface DeviceRegistration {
   token: string;
   pairedAt: string;
   lastSeen: string;
+  permissions?: DevicePermissions;
   capabilities: {
     smsSend: boolean;
     smsReceive: boolean;
@@ -174,6 +182,22 @@ export interface PairingSession {
   qrPayload: string;
 }
 
+export interface E2ETestStageResult {
+  id: string;
+  name: string;
+  description: string;
+  passed: boolean;
+  details: string;
+  timestamp: string;
+  evidence?: any;
+}
+
+export interface E2ETestSuiteResult {
+  allPassed: boolean;
+  timestamp: string;
+  stages: E2ETestStageResult[];
+}
+
 export interface ServerStateResponse {
   contacts: Contact[];
   conversations: Conversation[];
@@ -183,4 +207,6 @@ export interface ServerStateResponse {
   pendingDispatches: OutboundDispatch[];
   activePairing: PairingSession | null;
   geminiActive: boolean;
+  lastTestRun?: E2ETestSuiteResult | null;
 }
+

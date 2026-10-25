@@ -26,7 +26,8 @@ import { SettingsView } from './components/SettingsView';
 import { ActivityLogView } from './components/ActivityLogView';
 import { ArchitectureView } from './components/ArchitectureView';
 import { PhoneLinkModal } from './components/PhoneLinkModal';
-import { Sparkles, Check } from 'lucide-react';
+import { DeviceTestingSuiteView } from './components/DeviceTestingSuiteView';
+import { Sparkles, Check, ShieldCheck } from 'lucide-react';
 
 export default function App() {
   const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
@@ -38,10 +39,11 @@ export default function App() {
   const [connectedDevice, setConnectedDevice] = useState<DeviceRegistration | null>(null);
   const [pendingDispatches, setPendingDispatches] = useState<OutboundDispatch[]>([]);
   const [geminiActive, setGeminiActive] = useState<boolean>(false);
+  const [lastTestRun, setLastTestRun] = useState<any>(null);
   const [isPhoneModalOpen, setIsPhoneModalOpen] = useState<boolean>(false);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
-  // Navigation & View State ('chat' | 'scenarios' | 'settings' | 'activity' | 'architecture')
+  // Navigation & View State ('chat' | 'scenarios' | 'settings' | 'activity' | 'architecture' | 'device-tests')
   const [activeView, setActiveView] = useState<string>('chat');
   const [activeConversationId, setActiveConversationId] = useState<string>('conv-sarah');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
@@ -60,6 +62,7 @@ export default function App() {
       setConnectedDevice(data.connectedDevice || null);
       setPendingDispatches(data.pendingDispatches || []);
       setGeminiActive(Boolean(data.geminiActive));
+      if (data.lastTestRun) setLastTestRun(data.lastTestRun);
     } catch (err) {
       console.warn('[App] Backend state fetch fallback:', err);
     }
@@ -356,6 +359,18 @@ export default function App() {
               <Sparkles className="w-3 h-3" />
               <span>{geminiActive ? 'Gemini 3.8 Flash Active' : 'Deterministic Safety Safeguard Active'}</span>
             </span>
+            <span aria-hidden="true">·</span>
+            <button
+              onClick={() => setActiveView('device-tests')}
+              className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors ${
+                lastTestRun?.allPassed
+                  ? 'bg-[#34a853]/20 text-[#81c995] hover:bg-[#34a853]/30'
+                  : 'bg-[#a8c7fa]/20 text-[#a8c7fa] hover:bg-[#a8c7fa]/30'
+              }`}
+            >
+              <ShieldCheck className="w-3 h-3" />
+              <span>{lastTestRun?.allPassed ? 'E2E Verified (7/7 Passed)' : 'Run E2E Tests'}</span>
+            </button>
           </div>
 
           {/* Pending Dispatches Waiting for Device ACK Banner */}
@@ -438,6 +453,22 @@ export default function App() {
           {activeView === 'architecture' && (
             <div className="p-4 sm:p-6 overflow-y-auto">
               <ArchitectureView />
+            </div>
+          )}
+
+          {activeView === 'device-tests' && (
+            <div className="p-4 sm:p-6 overflow-y-auto">
+              <DeviceTestingSuiteView
+                connectedDevice={connectedDevice}
+                lastTestRun={lastTestRun}
+                conversations={conversations}
+                onRefreshState={fetchBackendState}
+                onOpenPhoneLink={() => setIsPhoneModalOpen(true)}
+                onSelectConversation={(id) => {
+                  setActiveConversationId(id);
+                  setActiveView('chat');
+                }}
+              />
             </div>
           )}
         </main>

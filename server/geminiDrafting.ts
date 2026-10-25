@@ -112,14 +112,22 @@ Return ONLY valid JSON with this exact structure:
 }
 `;
 
-      const response = await client.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          temperature: 0.3,
-        },
-      });
+      // Race call against a 4000ms timeout to prevent requests from hanging indefinitely
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Gemini API call timed out after 4000ms')), 4000)
+      );
+
+      const response = await Promise.race([
+        client.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+            temperature: 0.3,
+          },
+        }),
+        timeoutPromise,
+      ]);
 
       const responseText = response.text?.trim() || '';
       if (responseText) {
