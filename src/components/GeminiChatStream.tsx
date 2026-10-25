@@ -30,6 +30,7 @@ interface GeminiChatStreamProps {
   onRejectReply: (conversationId: string, messageId: string) => void;
   onRegenerateReply: (conversationId: string, style: CommunicationStyle) => void;
   onRunQuickPrompt: (scenarioId: number) => void;
+  onSimulateDeviceAck?: (dispatchId: string) => void;
 }
 
 export const GeminiChatStream: React.FC<GeminiChatStreamProps> = ({
@@ -39,6 +40,7 @@ export const GeminiChatStream: React.FC<GeminiChatStreamProps> = ({
   onRejectReply,
   onRegenerateReply,
   onRunQuickPrompt,
+  onSimulateDeviceAck,
 }) => {
   const [showThinkingFor, setShowThinkingFor] = useState<Record<string, boolean>>({});
   const [isEditingFor, setIsEditingFor] = useState<Record<string, boolean>>({});
@@ -156,25 +158,67 @@ export const GeminiChatStream: React.FC<GeminiChatStreamProps> = ({
           );
         }
 
-        // 2. Direct Assistant Auto-Sent Reply Message
+        // 2. Direct Assistant Auto-Sent or Approved Reply Message
         if (isAssistant) {
+          const isPendingDevice = msg.deliveryStatus === 'pending_device_ack';
+          const isDelivered = msg.deliveryStatus === 'delivered';
+          const isFailed = msg.deliveryStatus === 'failed';
+
           return (
             <div key={msg.id} className="flex items-start gap-3">
               <div className="w-8 h-8 rounded-full bg-[#1e1f20] border border-[#2d2f31] flex items-center justify-center shrink-0 mt-0.5">
                 <GeminiSparkle size={16} />
               </div>
 
-              <div className="flex-1 max-w-[85%] bg-[#1e1f20] border border-[#282a2c] rounded-2xl rounded-tl-xs px-4 py-3 text-xs sm:text-sm">
+              <div className="flex-1 max-w-[85%] bg-[#1e1f20] border border-[#282a2c] rounded-2xl rounded-tl-xs px-4 py-3 text-xs sm:text-sm shadow-xs">
                 <div className="text-[11px] text-[#8e918f] mb-1.5 flex items-center justify-between">
-                  <span className="font-bold text-[#a8c7fa]">v jay</span>
-                  <span className="font-mono text-[10px] text-[#34a853]">SIMULATED SENT</span>
-                </div>
-                <p className="text-[#e3e3e3] leading-relaxed whitespace-pre-wrap">{msg.body}</p>
-                {msg.transmissionId && (
-                  <div className="mt-2 text-[10px] text-[#8e918f] font-mono">
-                    ID: {msg.transmissionId}
+                  <span className="font-bold text-[#a8c7fa]">{msg.senderName}</span>
+                  <div>
+                    {isPendingDevice && (
+                      <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-[#fbbc04]/20 text-[#fdd663] border border-[#fbbc04]/40 font-bold flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#fbbc04] animate-ping" />
+                        PENDING DEVICE CONFIRMATION
+                      </span>
+                    )}
+                    {isDelivered && (
+                      <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-[#34a853]/20 text-[#81c995] border border-[#34a853]/40 font-bold">
+                        DELIVERED &amp; CONFIRMED BY DEVICE
+                      </span>
+                    )}
+                    {isFailed && (
+                      <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-[#ea4335]/20 text-[#f28b82] border border-[#ea4335]/40 font-bold">
+                        DEVICE DISPATCH FAILED
+                      </span>
+                    )}
+                    {!isPendingDevice && !isDelivered && !isFailed && (
+                      <span className="font-mono text-[10px] text-[#34a853]">SENT</span>
+                    )}
                   </div>
-                )}
+                </div>
+
+                <p className="text-[#e3e3e3] leading-relaxed whitespace-pre-wrap">{msg.body}</p>
+
+                {/* Device confirmation metadata & interactive simulator */}
+                <div className="mt-2.5 pt-2 border-t border-[#282a2c] flex flex-wrap items-center justify-between gap-2 text-[10px] text-[#8e918f] font-mono">
+                  <div className="flex items-center gap-2">
+                    {msg.transmissionId && <span>Tx: {msg.transmissionId}</span>}
+                    {msg.deviceAckTimestamp && (
+                      <span>Acked: {msg.deviceAckTimestamp}</span>
+                    )}
+                    {msg.dispatchId && <span>Queue ID: {msg.dispatchId}</span>}
+                  </div>
+
+                  {isPendingDevice && msg.dispatchId && onSimulateDeviceAck && (
+                    <button
+                      onClick={() => onSimulateDeviceAck(msg.dispatchId!)}
+                      className="px-2.5 py-1 bg-[#fbbc04]/20 hover:bg-[#fbbc04]/30 text-[#fdd663] border border-[#fbbc04]/40 rounded-full font-sans text-xs font-semibold flex items-center gap-1 transition-colors"
+                      title="Simulate device confirmation (for testing without live phone connected)"
+                    >
+                      <Check className="w-3 h-3" />
+                      <span>Confirm Sent on Device</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           );
@@ -338,7 +382,7 @@ export const GeminiChatStream: React.FC<GeminiChatStreamProps> = ({
                         className="px-4 py-2 bg-[#a8c7fa] hover:bg-[#8ab4f8] disabled:bg-[#282a2c] disabled:text-[#8e918f] text-[#041e49] text-xs font-bold rounded-full transition-all flex items-center gap-1.5 shadow-xs"
                       >
                         <Check className="w-3.5 h-3.5" />
-                        <span>Approve & Send (Simulated)</span>
+                        <span>Approve &amp; Dispatch to Phone</span>
                       </button>
 
                       <button

@@ -1,119 +1,152 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Smartphone, 
   Check, 
   Copy, 
   Upload, 
-  QrCode, 
   Terminal, 
-  Layers, 
   X, 
-  ExternalLink,
-  ShieldCheck,
-  CheckCircle2,
-  FileText,
-  Users
+  ShieldCheck, 
+  CheckCircle2, 
+  FileText, 
+  RefreshCw, 
+  KeyRound,
+  Radio,
+  Lock,
+  Layers,
+  Send
 } from 'lucide-react';
-import { GeminiSparkle } from './GeminiSparkle';
-import { Contact, ChannelType } from '../types';
+import { Contact, DeviceRegistration, PairingSession } from '../types';
 
 interface PhoneLinkModalProps {
   isOpen: boolean;
   onClose: () => void;
-  isDeviceConnected: boolean;
-  onSetDeviceConnected: (connected: boolean) => void;
-  onImportRealContacts: (contacts: Contact[]) => void;
+  connectedDevice: DeviceRegistration | null;
+  onRefreshState: () => void;
 }
 
 export const PhoneLinkModal: React.FC<PhoneLinkModalProps> = ({
   isOpen,
   onClose,
-  isDeviceConnected,
-  onSetDeviceConnected,
-  onImportRealContacts,
+  connectedDevice,
+  onRefreshState,
 }) => {
   const [activeTab, setActiveTab] = useState<'pair' | 'vcf' | 'native' | 'termux'>('pair');
-  const [copiedKey, setCopiedKey] = useState(false);
+  const [pairingData, setPairingData] = useState<PairingSession | null>(null);
+  const [isLoadingPairing, setIsLoadingPairing] = useState<boolean>(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [vcfStatus, setVcfStatus] = useState<string | null>(null);
+  const [isSimulatingPair, setIsSimulatingPair] = useState<boolean>(false);
+  const [pairingError, setPairingError] = useState<string | null>(null);
 
-  if (!isOpen) return null;
+  const serverOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
 
-  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
-  const pairingKey = 'GEMINI-PHONE-LINK-9428';
+  useEffect(() => {
+    if (isOpen) {
+      requestNewPairing();
+    }
+  }, [isOpen]);
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(true);
-    setTimeout(() => setCopiedKey(false), 2000);
+  const requestNewPairing = async () => {
+    setIsLoadingPairing(true);
+    setPairingError(null);
+    try {
+      const res = await fetch('/api/device/pair-request', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setPairingData({
+          pin: data.pin,
+          token: data.token,
+          expiresAt: data.expiresAt,
+          qrPayload: data.qrPayload,
+        });
+      } else {
+        setPairingError('Failed to generate pairing session');
+      }
+    } catch (err: any) {
+      setPairingError(err.message || 'Error connecting to backend');
+    } finally {
+      setIsLoadingPairing(false);
+    }
   };
 
-  // VCF Parser: parses standard vCard format exported by Android Google Contacts
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(id);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
+  const handleSimulateDevicePair = async () => {
+    if (!pairingData) return;
+    setIsSimulatingPair(true);
+    setPairingError(null);
+    try {
+      const res = await fetch('/api/device/pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pin: pairingData.pin,
+          deviceName: 'Pixel 8 Pro (Companion App)',
+          platform: 'android',
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        onRefreshState();
+      } else {
+        setPairingError(data.error || 'Pairing rejected');
+      }
+    } catch (err: any) {
+      setPairingError(err.message);
+    } finally {
+      setIsSimulatingPair(false);
+    }
+  };
+
+  const handleDisconnectDevice = async () => {
+    try {
+      await fetch('/api/device/disconnect', { method: 'POST' });
+      onRefreshState();
+      requestNewPairing();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // VCF Parser uploaded to backend
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const content = event.target?.result as string;
       if (!content) return;
 
       try {
-        const parsed = parseVCard(content);
-        if (parsed.length > 0) {
-          onImportRealContacts(parsed);
-          setVcfStatus(`Successfully imported ${parsed.length} real contacts from ${file.name}!`);
-          onSetDeviceConnected(true);
+        const res = await fetch('/api/contacts/vcf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vcfText: content }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          setVcfStatus(`Successfully imported ${data.count} contacts to backend!`);
+          onRefreshState();
         } else {
-          setVcfStatus('No valid contacts found in the selected .vcf file.');
+          setVcfStatus(`Import failed: ${data.error}`);
         }
       } catch (err: any) {
-        setVcfStatus(`Error parsing vCard file: ${err.message}`);
+        setVcfStatus(`Error importing vCard: ${err.message}`);
       }
     };
     reader.readAsText(file);
   };
 
-  const parseVCard = (vcfText: string): Contact[] => {
-    const cards = vcfText.split(/BEGIN:VCARD/i);
-    const results: Contact[] = [];
-
-    cards.forEach((card, index) => {
-      if (!card.trim()) return;
-
-      let name = '';
-      let phone = '';
-
-      // Match FN: (Formatted Name)
-      const fnMatch = card.match(/FN[;:]([^\r\n]+)/i);
-      if (fnMatch) {
-        name = fnMatch[1].trim();
-      }
-
-      // Match TEL:
-      const telMatch = card.match(/TEL[^:]*:([^\r\n]+)/i);
-      if (telMatch) {
-        phone = telMatch[1].replace(/[^\d+]/g, '').trim();
-      }
-
-      if (name && phone) {
-        results.push({
-          id: `real-contact-${Date.now()}-${index}`,
-          name,
-          phone,
-          channel: 'sms',
-          avatarColor: 'bg-[#70a6ff]',
-          isPermittedForAuto: false, // Default to approval required for safety
-          relationship: 'Phone Address Book',
-          lastActive: 'Imported from phone',
-        });
-      }
-    });
-
-    return results;
-  };
+  if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-[#1e1f20] border border-[#37393b] rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-fadeIn">
         {/* Modal Header */}
         <div className="p-5 border-b border-[#2d2f31] flex items-center justify-between">
@@ -124,16 +157,19 @@ export const PhoneLinkModal: React.FC<PhoneLinkModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-bold text-sm text-[#e3e3e3]">
-                  Link Real Android Phone
+                  Android Phone Link &amp; Device Bridge
                 </h3>
-                <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${
-                  isDeviceConnected ? 'bg-[#34a853]/20 text-[#81c995]' : 'bg-[#fbbc04]/20 text-[#fdd663]'
+                <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${
+                  connectedDevice 
+                    ? 'bg-[#34a853]/20 text-[#81c995] border border-[#34a853]/40' 
+                    : 'bg-[#fbbc04]/20 text-[#fdd663] border border-[#fbbc04]/40'
                 }`}>
-                  {isDeviceConnected ? 'PHONE CONNECTED' : 'READY TO PAIR'}
+                  <Radio className={`w-2.5 h-2.5 ${connectedDevice ? 'animate-pulse text-[#81c995]' : ''}`} />
+                  {connectedDevice ? 'PHONE CONNECTED' : 'AWAITING PAIRING'}
                 </span>
               </div>
               <p className="text-xs text-[#8e918f]">
-                Read and draft real messages from real contacts on SMS & WhatsApp
+                Authenticated hardware bridge for real SMS and WhatsApp RemoteInput
               </p>
             </div>
           </div>
@@ -154,7 +190,7 @@ export const PhoneLinkModal: React.FC<PhoneLinkModalProps> = ({
               activeTab === 'pair' ? 'bg-[#282a2c] text-[#e3e3e3]' : 'text-[#8e918f] hover:text-[#e3e3e3]'
             }`}
           >
-            1. Device Pairing
+            1. Authenticated Pairing
           </button>
           <button
             onClick={() => setActiveTab('vcf')}
@@ -162,7 +198,7 @@ export const PhoneLinkModal: React.FC<PhoneLinkModalProps> = ({
               activeTab === 'vcf' ? 'bg-[#282a2c] text-[#e3e3e3]' : 'text-[#8e918f] hover:text-[#e3e3e3]'
             }`}
           >
-            2. Import Real Contacts (.vcf)
+            2. Sync Contacts (.vcf)
           </button>
           <button
             onClick={() => setActiveTab('native')}
@@ -170,7 +206,7 @@ export const PhoneLinkModal: React.FC<PhoneLinkModalProps> = ({
               activeTab === 'native' ? 'bg-[#282a2c] text-[#e3e3e3]' : 'text-[#8e918f] hover:text-[#e3e3e3]'
             }`}
           >
-            3. Native Kotlin App
+            3. Android Companion App
           </button>
           <button
             onClick={() => setActiveTab('termux')}
@@ -178,70 +214,137 @@ export const PhoneLinkModal: React.FC<PhoneLinkModalProps> = ({
               activeTab === 'termux' ? 'bg-[#282a2c] text-[#e3e3e3]' : 'text-[#8e918f] hover:text-[#e3e3e3]'
             }`}
           >
-            4. Termux Quick Bridge
+            4. Real-Device Bridge (CLI)
           </button>
         </div>
 
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
-          {/* Tab 1: Device Pairing Details */}
+          {/* Tab 1: Authenticated Pairing */}
           {activeTab === 'pair' && (
             <div className="space-y-4">
-              <div className="p-4 bg-[#131314] rounded-2xl border border-[#282a2c] flex items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <div className="text-[#8e918f] text-[11px] uppercase tracking-wider font-bold">
-                    Assistant Server Endpoint
+              {connectedDevice ? (
+                /* Connected State View */
+                <div className="p-4 bg-[#131314] rounded-2xl border border-[#34a853]/40 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-5 h-5 text-[#81c995]" />
+                      <span className="font-bold text-sm text-[#81c995]">
+                        Device Authenticated &amp; Active
+                      </span>
+                    </div>
+                    <button
+                      onClick={handleDisconnectDevice}
+                      className="px-3 py-1 bg-[#ea4335]/20 hover:bg-[#ea4335]/30 text-[#f28b82] border border-[#ea4335]/40 rounded-full font-semibold transition-colors"
+                    >
+                      Disconnect Device
+                    </button>
                   </div>
-                  <div className="font-mono text-xs text-[#a8c7fa] select-all">
-                    {currentOrigin}
-                  </div>
-                </div>
-                <button
-                  onClick={() => copyToClipboard(currentOrigin)}
-                  className="px-3 py-1.5 bg-[#282a2c] hover:bg-[#333538] text-[#c4c7c5] rounded-full flex items-center gap-1.5"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>Copy URL</span>
-                </button>
-              </div>
 
-              <div className="p-4 bg-[#131314] rounded-2xl border border-[#282a2c] flex items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <div className="text-[#8e918f] text-[11px] uppercase tracking-wider font-bold">
-                    Encrypted Device Pairing Key
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[#8e918f] pt-1">
+                    <div>
+                      <span className="text-[#c4c7c5] font-semibold">Device Name: </span>
+                      {connectedDevice.name}
+                    </div>
+                    <div>
+                      <span className="text-[#c4c7c5] font-semibold">Platform: </span>
+                      {connectedDevice.platform.toUpperCase()}
+                    </div>
+                    <div>
+                      <span className="text-[#c4c7c5] font-semibold">Paired Since: </span>
+                      {new Date(connectedDevice.pairedAt).toLocaleTimeString()}
+                    </div>
+                    <div>
+                      <span className="text-[#c4c7c5] font-semibold">Last Heartbeat: </span>
+                      {new Date(connectedDevice.lastSeen).toLocaleTimeString()}
+                    </div>
                   </div>
-                  <div className="font-mono text-sm text-[#81c995] font-bold select-all">
-                    {pairingKey}
-                  </div>
-                </div>
-                <button
-                  onClick={() => copyToClipboard(pairingKey)}
-                  className="px-3 py-1.5 bg-[#282a2c] hover:bg-[#333538] text-[#c4c7c5] rounded-full flex items-center gap-1.5"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>{copiedKey ? 'Copied!' : 'Copy Key'}</span>
-                </button>
-              </div>
 
-              {/* Status Simulation Toggle */}
-              <div className="p-4 bg-[#131314] rounded-2xl border border-[#282a2c] flex items-center justify-between">
-                <div>
-                  <div className="font-bold text-[#e3e3e3]">Simulate Active Physical Bridge</div>
-                  <div className="text-[11px] text-[#8e918f]">
-                    Marks phone as linked so outgoing messages route through the device bridge
+                  <div className="pt-2 border-t border-[#282a2c] text-[11px] text-[#8e918f]">
+                    <span className="font-bold text-[#c4c7c5]">Active Capabilities: </span>
+                    SMS Read/Send, WhatsApp RemoteInput Quick-Replies, Contact Address Book Sync.
                   </div>
                 </div>
-                <button
-                  onClick={() => onSetDeviceConnected(!isDeviceConnected)}
-                  className={`px-4 py-2 rounded-full font-bold transition-colors ${
-                    isDeviceConnected
-                      ? 'bg-[#34a853] text-[#041e49]'
-                      : 'bg-[#282a2c] text-[#a8c7fa] border border-[#37393b]'
-                  }`}
-                >
-                  {isDeviceConnected ? 'Connected (Tap to Disconnect)' : 'Tap to Mark as Connected'}
-                </button>
-              </div>
+              ) : (
+                /* Pairing Challenge View */
+                <div className="space-y-4">
+                  <div className="p-4 bg-[#131314] rounded-2xl border border-[#282a2c] space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-bold text-[#e3e3e3]">
+                        <KeyRound className="w-4 h-4 text-[#a8c7fa]" />
+                        <span>Dynamic Cryptographic Pairing Code</span>
+                      </div>
+                      <button
+                        onClick={requestNewPairing}
+                        disabled={isLoadingPairing}
+                        className="text-[#8e918f] hover:text-[#e3e3e3] flex items-center gap-1 font-mono text-[11px]"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isLoadingPairing ? 'animate-spin' : ''}`} />
+                        <span>Regenerate PIN</span>
+                      </button>
+                    </div>
+
+                    <p className="text-[#8e918f]">
+                      Enter this 6-digit one-time PIN in the Android Companion app or CLI bridge. Static public secrets have been removed for end-to-end security.
+                    </p>
+
+                    {pairingData ? (
+                      <div className="pt-2 flex flex-col sm:flex-row items-center gap-4 justify-between bg-[#1e1f20] p-4 rounded-xl border border-[#2d2f31]">
+                        <div>
+                          <div className="text-[10px] uppercase font-bold text-[#8e918f] tracking-wider mb-0.5">
+                            One-Time PIN (Expires in 15 mins)
+                          </div>
+                          <div className="text-3xl font-mono font-bold tracking-widest text-[#a8c7fa]">
+                            {pairingData.pin}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => copyToClipboard(pairingData.pin, 'pin')}
+                            className="px-3.5 py-1.5 bg-[#282a2c] hover:bg-[#333538] text-[#e3e3e3] rounded-full flex items-center gap-1 font-medium transition-colors"
+                          >
+                            <Copy className="w-3.5 h-3.5 text-[#a8c7fa]" />
+                            <span>{copiedKey === 'pin' ? 'Copied' : 'Copy PIN'}</span>
+                          </button>
+
+                          <button
+                            onClick={handleSimulateDevicePair}
+                            disabled={isSimulatingPair}
+                            className="px-4 py-1.5 bg-[#a8c7fa] hover:bg-[#8ab4f8] text-[#041e49] font-bold rounded-full transition-colors flex items-center gap-1.5 shadow-xs"
+                          >
+                            <Radio className="w-3.5 h-3.5" />
+                            <span>{isSimulatingPair ? 'Connecting...' : 'Connect Simulated Device'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-4 text-[#8e918f]">Generating pairing token...</div>
+                    )}
+
+                    {pairingError && (
+                      <div className="text-xs text-[#f28b82] font-mono pt-1">
+                        Error: {pairingError}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Server Endpoint URL */}
+                  <div className="p-3.5 bg-[#131314] rounded-2xl border border-[#282a2c] flex items-center justify-between">
+                    <div>
+                      <div className="text-[10px] uppercase font-bold text-[#8e918f]">Server Endpoint</div>
+                      <div className="font-mono text-xs text-[#c4c7c5]">{serverOrigin}</div>
+                    </div>
+                    <button
+                      onClick={() => copyToClipboard(serverOrigin, 'url')}
+                      className="px-3 py-1 bg-[#282a2c] hover:bg-[#333538] text-[#c4c7c5] rounded-full flex items-center gap-1"
+                    >
+                      <Copy className="w-3 h-3 text-[#a8c7fa]" />
+                      <span>{copiedKey === 'url' ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -251,13 +354,12 @@ export const PhoneLinkModal: React.FC<PhoneLinkModalProps> = ({
               <div className="p-4 bg-[#131314] rounded-2xl border border-[#282a2c] space-y-2">
                 <div className="flex items-center gap-2 font-bold text-[#e3e3e3]">
                   <FileText className="w-4 h-4 text-[#a8c7fa]" />
-                  <span>How to export your real contacts from Android:</span>
+                  <span>How to export your contacts from Android:</span>
                 </div>
                 <ol className="list-decimal list-inside space-y-1 text-[#8e918f] pl-1">
-                  <li>Open the <strong>Contacts</strong> app on your Android phone.</li>
-                  <li>Tap <strong>Settings</strong> (or "Fix & manage" tab).</li>
-                  <li>Tap <strong>Export to file</strong> (`contacts.vcf`).</li>
-                  <li>Drop that file in the uploader below to load your real friends & family!</li>
+                  <li>Open the <strong>Contacts</strong> app on your Android device.</li>
+                  <li>Tap <strong>Settings / Fix &amp; Manage</strong> &rarr; <strong>Export to file (.vcf)</strong>.</li>
+                  <li>Select or drop the file below. Contacts are parsed securely on the server with default manual approval.</li>
                 </ol>
               </div>
 
@@ -293,44 +395,45 @@ export const PhoneLinkModal: React.FC<PhoneLinkModalProps> = ({
               <div className="p-4 bg-[#131314] rounded-2xl border border-[#282a2c] space-y-2 text-[#8e918f]">
                 <div className="font-bold text-[#e3e3e3] flex items-center gap-2">
                   <ShieldCheck className="w-4 h-4 text-[#81c995]" />
-                  <span>Complete Kotlin Project Ready in Repository</span>
+                  <span>Android Companion Architecture (`/android-companion-app`)</span>
                 </div>
                 <p>
-                  We have provided the complete native Android project in <code className="text-[#a8c7fa]">/android-companion-app</code>:
+                  The companion app bridges Android system broadcasts to your assistant server:
                 </p>
                 <ul className="list-disc list-inside space-y-1 pl-1">
-                  <li><code>SmsReceiver.kt</code>: Listens for incoming real SMS in background.</li>
-                  <li><code>WhatsAppNotificationListener.kt</code>: Intercepts WhatsApp messages and executes RemoteInput quick-replies.</li>
-                  <li><code>DeviceBridge.kt</code>: Reads phone address book and syncs to server.</li>
+                  <li><code>SmsReceiver.kt</code>: Listens for incoming SMS via <code>android.provider.Telephony.SMS_RECEIVED</code> and posts to <code>/api/device/message-ingress</code>.</li>
+                  <li><code>WhatsAppNotificationListener.kt</code>: Intercepts WhatsApp notification events and executes Wearable <code>RemoteInput</code> quick-replies.</li>
+                  <li><code>DeviceBridge.kt</code>: Periodically polls <code>/api/device/pending-dispatches</code> and fires <code>/api/device/confirm-dispatch</code> after dispatch.</li>
                 </ul>
-                <div className="mt-3 p-3 bg-[#1e1f20] rounded-xl border border-[#2d2f31] font-mono text-[11px] text-[#c4c7c5]">
-                  <div># Build APK via command line:</div>
-                  <div className="text-[#a8c7fa]">cd android-companion-app &amp;&amp; ./gradlew assembleDebug</div>
-                  <div className="mt-1"># Install directly onto your connected Android phone:</div>
-                  <div className="text-[#a8c7fa]">adb install app/build/outputs/apk/debug/app-debug.apk</div>
-                </div>
               </div>
             </div>
           )}
 
-          {/* Tab 4: Termux Quick Bridge */}
+          {/* Tab 4: Termux Real-Device Bridge */}
           {activeTab === 'termux' && (
             <div className="space-y-3">
               <div className="p-4 bg-[#131314] rounded-2xl border border-[#2d2f31] space-y-2">
                 <div className="flex items-center gap-2 font-bold text-[#e3e3e3]">
                   <Terminal className="w-4 h-4 text-[#fbbc04]" />
-                  <span>Run Directly on Android with Termux (No Android Studio)</span>
+                  <span>Run Directly on Android with Termux</span>
                 </div>
                 <p className="text-[#8e918f]">
-                  Install <strong>Termux</strong> and <strong>Termux:API</strong> from F-Droid on your phone. Then paste this single command:
+                  Open <strong>Termux</strong> on your phone. Pair with your assistant in one command:
                 </p>
 
-                <div className="p-3 bg-[#1e1f20] rounded-xl border border-[#2d2f31] font-mono text-[11px] text-[#a8c7fa] select-all overflow-x-auto">
-                  pkg update && pkg install python termux-api -y && python3 termux-bridge/termux_bridge.py --server {currentOrigin} --key {pairingKey}
+                <div className="p-3 bg-[#131314] rounded-xl border border-[#282a2c] font-mono text-[11px] text-[#a8c7fa] select-all overflow-x-auto space-y-1">
+                  <div># 1. Pair your device:</div>
+                  <div className="text-[#81c995]">
+                    curl -X POST "{serverOrigin}/api/device/pair" -H "Content-Type: application/json" -d '{`{"pin": "${pairingData?.pin || '123456'}", "deviceName": "My Android Phone"}`}'
+                  </div>
+                  <div className="mt-2 text-[#8e918f]"># 2. Receive dispatch notifications &amp; report confirmations:</div>
+                  <div className="text-[#c4c7c5]">
+                    curl -s "{serverOrigin}/api/device/pending-dispatches" -H "Authorization: Bearer &lt;YOUR_TOKEN&gt;"
+                  </div>
                 </div>
 
                 <p className="text-[11px] text-[#8e918f]">
-                  Termux will read your contacts via <code>termux-contact-list</code>, stream real SMS directly to this dashboard, and send approved replies via <code>termux-sms-send</code>!
+                  Approved SMS will be dispatched via <code>termux-sms-send</code>, and success is acknowledged back to <code>/api/device/confirm-dispatch</code>.
                 </p>
               </div>
             </div>
@@ -340,11 +443,11 @@ export const PhoneLinkModal: React.FC<PhoneLinkModalProps> = ({
         {/* Modal Footer */}
         <div className="p-4 border-t border-[#2d2f31] bg-[#18191a] flex items-center justify-between text-xs">
           <span className="text-[#8e918f]">
-            Pairing Token Active · Port 3000 / Webhook Ingress
+            {connectedDevice ? `Linked: ${connectedDevice.name}` : 'Encrypted Token Challenge Active'}
           </span>
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-[#e3e3e3] hover:bg-white text-[#131314] font-bold rounded-full transition-colors"
+            className="px-5 py-2 bg-[#e3e3e3] hover:bg-white text-[#131314] font-bold rounded-full transition-colors"
           >
             Done
           </button>

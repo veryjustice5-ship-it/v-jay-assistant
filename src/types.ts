@@ -33,6 +33,7 @@ export interface Contact {
   isPermittedForAuto: boolean; // For Mode C
   relationship: string;
   lastActive: string;
+  isTestContact?: boolean; // For safe testing workflow
 }
 
 export interface Message {
@@ -46,8 +47,10 @@ export interface Message {
   category?: MessageCategory;
   isFlagged?: boolean;
   flagReason?: string;
-  deliveryStatus?: 'received' | 'draft' | 'pending_approval' | 'simulated_sent' | 'rejected';
+  deliveryStatus?: 'received' | 'draft' | 'pending_approval' | 'pending_device_ack' | 'delivered' | 'simulated_sent' | 'rejected' | 'failed';
   transmissionId?: string;
+  dispatchId?: string;
+  deviceAckTimestamp?: string;
   suggestedReply?: SuggestedReply;
 }
 
@@ -131,4 +134,53 @@ export interface SystemSettings {
   maxPerContactPerHour: number;
   escalateSensitiveAlways: boolean;
   escalateUnknownAlways: boolean;
+}
+
+export interface OutboundDispatch {
+  id: string;
+  messageId: string;
+  conversationId: string;
+  channel: ChannelType;
+  recipient: string;
+  recipientPhone: string;
+  text: string;
+  status: 'pending' | 'delivered' | 'failed';
+  method: 'android_sms_manager' | 'whatsapp_remote_input' | 'simulated';
+  createdAt: string;
+  confirmedAt?: string;
+  deviceTxId?: string;
+  error?: string;
+}
+
+export interface DeviceRegistration {
+  id: string;
+  name: string;
+  platform: 'android' | 'termux' | 'emulator' | 'other';
+  token: string;
+  pairedAt: string;
+  lastSeen: string;
+  capabilities: {
+    smsSend: boolean;
+    smsReceive: boolean;
+    whatsappRemoteInput: boolean;
+    contactSync: boolean;
+  };
+}
+
+export interface PairingSession {
+  pin: string;
+  token: string;
+  expiresAt: number;
+  qrPayload: string;
+}
+
+export interface ServerStateResponse {
+  contacts: Contact[];
+  conversations: Conversation[];
+  settings: SystemSettings;
+  auditLogs: AuditLogEntry[];
+  connectedDevice: DeviceRegistration | null;
+  pendingDispatches: OutboundDispatch[];
+  activePairing: PairingSession | null;
+  geminiActive: boolean;
 }

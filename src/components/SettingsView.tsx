@@ -242,6 +242,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <span className={c.channel === 'sms' ? 'text-[#70a6ff] font-medium' : 'text-[#25d366] font-medium'}>
                       [{c.channel.toUpperCase()}]
                     </span>
+                    {c.isTestContact && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#a8c7fa]/20 text-[#a8c7fa] border border-[#a8c7fa]/40">
+                        SAFE TEST RIG
+                      </span>
+                    )}
                   </div>
                   <span className="text-[#8e918f] font-mono">{c.phone}</span>
                 </div>

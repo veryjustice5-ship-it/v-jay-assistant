@@ -3,24 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
-import { 
-  INITIAL_SETTINGS, 
-  INITIAL_CONTACTS, 
-  INITIAL_CONVERSATIONS, 
-  INITIAL_AUDIT_LOGS,
-  SCENARIO_PRESETS 
-} from './data/mockData';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Conversation, 
   Contact, 
   SystemSettings, 
   AuditLogEntry, 
-  PipelineExecutionResult, 
   ChannelType, 
-  CommunicationStyle,
-  Message 
+  DeviceRegistration,
+  OutboundDispatch,
+  ServerStateResponse,
+  PipelineExecutionResult
 } from './types';
+import { INITIAL_SETTINGS, INITIAL_CONTACTS, INITIAL_CONVERSATIONS, INITIAL_AUDIT_LOGS, SCENARIO_PRESETS } from './data/mockData';
 import { executeMessagePipeline } from './services/pipeline';
 import { GeminiSidebar } from './components/GeminiSidebar';
 import { GeminiHeader } from './components/GeminiHeader';
@@ -31,6 +26,7 @@ import { SettingsView } from './components/SettingsView';
 import { ActivityLogView } from './components/ActivityLogView';
 import { ArchitectureView } from './components/ArchitectureView';
 import { PhoneLinkModal } from './components/PhoneLinkModal';
+import { Sparkles, Check } from 'lucide-react';
 
 export default function App() {
   const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
@@ -38,14 +34,43 @@ export default function App() {
   const [conversations, setConversations] = useState<Conversation[]>(INITIAL_CONVERSATIONS);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
   
-  // Real Phone Link State
-  const [isDeviceConnected, setIsDeviceConnected] = useState<boolean>(false);
+  // Real Device & Backend State
+  const [connectedDevice, setConnectedDevice] = useState<DeviceRegistration | null>(null);
+  const [pendingDispatches, setPendingDispatches] = useState<OutboundDispatch[]>([]);
+  const [geminiActive, setGeminiActive] = useState<boolean>(false);
   const [isPhoneModalOpen, setIsPhoneModalOpen] = useState<boolean>(false);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
   // Navigation & View State ('chat' | 'scenarios' | 'settings' | 'activity' | 'architecture')
   const [activeView, setActiveView] = useState<string>('chat');
   const [activeConversationId, setActiveConversationId] = useState<string>('conv-sarah');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
+
+  // Fetch complete state from backend
+  const fetchBackendState = useCallback(async () => {
+    try {
+      const res = await fetch('/api/state');
+      if (!res.ok) return;
+      const data: ServerStateResponse = await res.json();
+      
+      if (data.settings) setSettings(data.settings);
+      if (data.contacts) setContacts(data.contacts);
+      if (data.conversations) setConversations(data.conversations);
+      if (data.auditLogs) setAuditLogs(data.auditLogs);
+      setConnectedDevice(data.connectedDevice || null);
+      setPendingDispatches(data.pendingDispatches || []);
+      setGeminiActive(Boolean(data.geminiActive));
+    } catch (err) {
+      console.warn('[App] Backend state fetch fallback:', err);
+    }
+  }, []);
+
+  // Initial load and periodic polling (every 4s) to capture real device ingress & confirmations
+  useEffect(() => {
+    fetchBackendState();
+    const interval = setInterval(fetchBackendState, 4000);
+    return () => clearInterval(interval);
+  }, [fetchBackendState]);
 
   // Active Conversation
   const activeConversation = useMemo(() => {
@@ -73,7 +98,7 @@ export default function App() {
     return conversations.filter((c) => c.hasPendingApproval).length;
   }, [conversations]);
 
-  // Handler: Execute Pipeline
+  // Handler: Ingress message through pipeline (sync result for UI, async sync to backend)
   const handleExecutePipeline = (
     text: string,
     contactId: string,
@@ -98,218 +123,174 @@ export default function App() {
 
     const result = executeMessagePipeline(text, contact, channel, effectiveSettings);
 
-    // Record in Audit Trail
-    const newLog: AuditLogEntry = {
-      id: `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      timestamp: new Date().toLocaleTimeString(),
-      eventType: 'MESSAGE_INGRESS',
-      channel,
-      senderOrRecipient: contact.name,
-      actionTaken: result.decision,
-      category: result.category,
-      details: `[${channel.toUpperCase()}] "${text.substring(0, 60)}..." -> ${result.decision}. Reason: ${result.decisionReason}`,
-      decision: result.decision,
-      isSimulated: true,
-    };
-
-    setAuditLogs((prev) => [newLog, ...prev]);
+    // Sync to backend API asynchronously
+    fetch('/api/messages/ingress', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        contactId,
+        channel,
+        tempSettingsOverride,
+      }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success) {
+          fetchBackendState();
+        }
+      })
+      .catch((err) => console.warn('[App] Ingress async sync:', err));
 
     return result;
   };
 
-  // Handler: Apply pipeline output as active conversation message
   const handleApplyPipelineResultToConversation = (result: PipelineExecutionResult) => {
-    setConversations((prev) => {
-      let targetConv = prev.find((c) => c.contactName === result.senderName && c.channel === result.channel);
-      const isAuto = result.decision === 'AUTO_SEND_ELIGIBLE';
-
-      const incomingMsg: Message = {
-        id: result.messageId,
-        conversationId: targetConv?.id || `conv-${Date.now()}`,
-        senderType: 'contact',
-        senderName: result.senderName,
-        body: result.incomingText,
-        channel: result.channel,
-        timestamp: result.timestamp,
-        category: result.category,
-        deliveryStatus: isAuto ? 'simulated_sent' : 'pending_approval',
-        transmissionId: result.simulatedTransmissionId,
-        suggestedReply: {
-          text: result.suggestedText,
-          alternatives: result.alternatives,
-          confidence: result.confidence,
-          reasoning: result.classificationReason,
-          requiresPersonalDecision: result.requiresPersonalDecision,
-          appliedStyle: settings.communicationStyle,
-          decision: result.decision,
-          decisionReason: result.decisionReason,
-          isAutoSent: isAuto,
-          transmissionId: result.simulatedTransmissionId,
-        },
-      };
-
-      if (!targetConv) {
-        targetConv = {
-          id: incomingMsg.conversationId,
-          contactId: `contact-${Date.now()}`,
-          contactName: result.senderName,
-          contactPhone: '+1 (555) 987-6543',
-          channel: result.channel,
-          avatarColor: result.channel === 'sms' ? 'bg-[#70a6ff]' : 'bg-[#25d366]',
-          lastMessage: result.incomingText,
-          lastMessageTime: result.timestamp,
-          unreadCount: 1,
-          hasPendingApproval: !isAuto,
-          messages: [incomingMsg],
-        };
-        return [targetConv, ...prev];
-      }
-
-      const updated = prev.map((c) => {
-        if (c.id === targetConv!.id) {
-          const newMessages = [...c.messages, incomingMsg];
-          if (isAuto && result.suggestedText) {
-            newMessages.push({
-              id: `msg-reply-${Date.now()}`,
-              conversationId: c.id,
-              senderType: 'assistant',
-              senderName: 'v jay (Auto-Sent)',
-              body: result.suggestedText,
-              channel: result.channel,
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              deliveryStatus: 'simulated_sent',
-              transmissionId: result.simulatedTransmissionId,
-            });
-          }
-
-          return {
-            ...c,
-            lastMessage: incomingMsg.body,
-            lastMessageTime: incomingMsg.timestamp,
-            hasPendingApproval: !isAuto,
-            messages: newMessages,
-          };
-        }
-        return c;
-      });
-
-      return updated;
-    });
-
-    const matching = conversations.find((c) => c.contactName === result.senderName);
-    if (matching) {
-      setActiveConversationId(matching.id);
+    const match = contacts.find((c) => c.name === result.senderName);
+    if (match) {
+      const matchingConv = conversations.find((c) => c.contactName === match.name);
+      if (matchingConv) setActiveConversationId(matchingConv.id);
     }
   };
 
-  // Handler: Approve and Send (Simulated)
-  const handleApproveReply = (conversationId: string, messageId: string, replyText: string) => {
-    const simTxId = `sim-manual-${Math.random().toString(36).substring(2, 9)}`;
-
-    setConversations((prev) =>
-      prev.map((c) => {
-        if (c.id === conversationId) {
-          const updatedMessages = c.messages.map((m) => {
-            if (m.id === messageId) {
-              return {
-                ...m,
-                deliveryStatus: 'simulated_sent' as const,
-                transmissionId: simTxId,
-              };
-            }
-            return m;
-          });
-
-          updatedMessages.push({
-            id: `msg-asst-${Date.now()}`,
-            conversationId,
-            senderType: 'assistant',
-            senderName: 'v jay (Approved)',
-            body: replyText,
-            channel: c.channel,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            deliveryStatus: 'simulated_sent',
-            transmissionId: simTxId,
-          });
-
-          return {
-            ...c,
-            hasPendingApproval: false,
-            messages: updatedMessages,
-          };
-        }
-        return c;
-      })
-    );
-
-    const targetConv = conversations.find((c) => c.id === conversationId);
-    setAuditLogs((prev) => [
-      {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleTimeString(),
-        eventType: 'MANUAL_APPROVED',
-        channel: targetConv?.channel || 'sms',
-        senderOrRecipient: targetConv?.contactName || 'Recipient',
-        actionTaken: 'MANUAL_APPROVE_DISPATCH',
-        details: `User approved reply: "${replyText.substring(0, 60)}...". Tx: ${simTxId}`,
-        decision: 'AUTO_SEND_ELIGIBLE',
-        isSimulated: true,
-      },
-      ...prev,
-    ]);
+  // Handler: Approve and Send via Device
+  const handleApproveReply = async (conversationId: string, messageId: string, replyText: string) => {
+    setIsSyncing(true);
+    try {
+      const res = await fetch('/api/messages/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId,
+          messageId,
+          action: 'approve',
+          replyText,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await fetchBackendState();
+      }
+    } catch (err) {
+      console.error('[App] Approval action error:', err);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   // Handler: Reject Reply
-  const handleRejectReply = (conversationId: string, messageId: string) => {
-    setConversations((prev) =>
-      prev.map((c) => {
-        if (c.id === conversationId) {
-          const updatedMessages = c.messages.map((m) => {
-            if (m.id === messageId) {
-              return {
-                ...m,
-                deliveryStatus: 'rejected' as const,
-              };
-            }
-            return m;
-          });
+  const handleRejectReply = async (conversationId: string, messageId: string) => {
+    setIsSyncing(true);
+    try {
+      const res = await fetch('/api/messages/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId,
+          messageId,
+          action: 'reject',
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await fetchBackendState();
+      }
+    } catch (err) {
+      console.error('[App] Reject action error:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
-          return {
-            ...c,
-            hasPendingApproval: false,
-            messages: updatedMessages,
-          };
-        }
-        return c;
-      })
-    );
+  // Handler: Simulate Device Delivery ACK (for prototype testing without physical phone polling)
+  const handleSimulateDeviceAck = async (dispatchId: string) => {
+    setIsSyncing(true);
+    try {
+      const res = await fetch('/api/device/simulate-ack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dispatchId, status: 'delivered' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await fetchBackendState();
+      }
+    } catch (err) {
+      console.error('[App] Simulate ACK error:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
-    const targetConv = conversations.find((c) => c.id === conversationId);
-    setAuditLogs((prev) => [
-      {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleTimeString(),
-        eventType: 'REPLY_REJECTED',
-        channel: targetConv?.channel || 'sms',
-        senderOrRecipient: targetConv?.contactName || 'Recipient',
-        actionTaken: 'USER_REJECTED_DRAFT',
-        details: `User explicitly rejected draft for: ${targetConv?.contactName}`,
-        decision: 'REQUIRES_APPROVAL',
-        isSimulated: true,
-      },
-      ...prev,
-    ]);
+  // Handler: Update Settings on Backend
+  const handleUpdateSettings = async (newSettings: Partial<SystemSettings>) => {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newSettings),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSettings(data.settings);
+      }
+    } catch (err) {
+      console.error('[App] Update settings error:', err);
+    }
+  };
+
+  // Handler: Update Contact Authorization for Mode C
+  const handleUpdateContactPermission = async (contactId: string, isPermitted: boolean) => {
+    try {
+      const res = await fetch(`/api/contacts/${contactId}/permission`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPermitted }),
+      });
+      if (res.ok) {
+        await fetchBackendState();
+      }
+    } catch (err) {
+      console.error('[App] Update contact permission error:', err);
+    }
+  };
+
+  // Handler: Add Contact
+  const handleAddContact = async (contact: Omit<Contact, 'id'>) => {
+    try {
+      const res = await fetch('/api/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(contact),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await fetchBackendState();
+      }
+    } catch (err) {
+      console.error('[App] Add contact error:', err);
+    }
+  };
+
+  // Handler: Clear All Data
+  const handleClearAllData = async () => {
+    try {
+      await fetch('/api/purge', { method: 'POST' });
+      await fetchBackendState();
+    } catch (err) {
+      console.error('[App] Purge error:', err);
+    }
   };
 
   // Handler: Quick prompt from Gemini Greeting Screen
-  const handleRunQuickPrompt = (scenarioId: number) => {
+  const handleRunQuickPrompt = async (scenarioId: number) => {
     const preset = SCENARIO_PRESETS.find((p) => p.id === scenarioId);
     if (!preset) return;
 
     let override: Partial<SystemSettings> | undefined = undefined;
     if (preset.id === 3) {
       override = { automationMode: 'restricted_auto', automationEnabled: true, emergencyStop: false };
-      setSettings((s) => ({ ...s, ...override }));
+      await handleUpdateSettings(override);
     }
 
     const result = handleExecutePipeline(preset.messageText, preset.senderId, preset.channel, override);
@@ -324,130 +305,78 @@ export default function App() {
     setActiveView('chat');
   };
 
-  // Handler: Clear All Data
-  const handleClearAllData = () => {
-    setConversations([]);
-    setAuditLogs([
-      {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleTimeString(),
-        eventType: 'CONFIG_CHANGE',
-        channel: 'system',
-        senderOrRecipient: 'User / Privacy Engine',
-        actionTaken: 'DATA_RETENTION_PURGE',
-        details: 'All stored conversation data, drafts, and historical records purged upon user request.',
-        decision: 'SYSTEM_EVENT',
-        isSimulated: true,
-      },
-    ]);
-  };
-
-  // Handler: Import Real Contacts from phone (vCard or Companion Sync)
-  const handleImportRealContacts = (realContacts: Contact[]) => {
-    setContacts((prev) => {
-      // Avoid duplicate phones
-      const existingPhones = new Set(prev.map((c) => c.phone.replace(/[^\d]/g, '')));
-      const newItems = realContacts.filter((c) => !existingPhones.has(c.phone.replace(/[^\d]/g, '')));
-      return [...newItems, ...prev];
-    });
-
-    // Automatically create starter conversations for these real contacts
-    setConversations((prev) => {
-      const existingContactIds = new Set(prev.map((c) => c.contactId));
-      const starterConvs: Conversation[] = realContacts.slice(0, 5).map((c, i) => ({
-        id: `conv-real-${Date.now()}-${i}`,
-        contactId: c.id,
-        contactName: c.name,
-        contactPhone: c.phone,
-        channel: c.channel,
-        avatarColor: c.avatarColor,
-        lastMessage: 'Linked from your real Android phone address book',
-        lastMessageTime: 'Just now',
-        unreadCount: 0,
-        hasPendingApproval: false,
-        messages: [
-          {
-            id: `msg-real-${Date.now()}-${i}`,
-            conversationId: `conv-real-${Date.now()}-${i}`,
-            senderType: 'user',
-            senderName: 'You',
-            body: `Phone address book contact synced: ${c.name} (${c.phone}). Ready to draft and receive real messages.`,
-            channel: c.channel,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            deliveryStatus: 'received',
-          },
-        ],
-      }));
-
-      return [...starterConvs, ...prev];
-    });
-
-    setAuditLogs((prev) => [
-      {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toLocaleTimeString(),
-        eventType: 'CONFIG_CHANGE',
-        channel: 'system',
-        senderOrRecipient: 'Android Address Book',
-        actionTaken: 'REAL_CONTACTS_IMPORTED',
-        details: `Imported ${realContacts.length} real contacts from Android device into assistant allowlist database.`,
-        decision: 'SYSTEM_EVENT',
-        isSimulated: false,
-      },
-      ...prev,
-    ]);
-  };
-
   return (
-    <div className="min-h-screen bg-[#131314] text-[#e3e3e3] flex overflow-x-hidden font-sans">
-      {/* Real Phone Link & vCard Contact Import Dialog */}
-      <PhoneLinkModal
-        isOpen={isPhoneModalOpen}
-        onClose={() => setIsPhoneModalOpen(false)}
-        isDeviceConnected={isDeviceConnected}
-        onSetDeviceConnected={setIsDeviceConnected}
-        onImportRealContacts={handleImportRealContacts}
-      />
-
-      {/* Gemini Sidebar Rail */}
+    <div className="flex h-screen bg-[#131314] text-[#e3e3e3] overflow-hidden selection:bg-[#282a2c]">
+      {/* 1. Left Gemini Collapsible Rail Sidebar */}
       <GeminiSidebar
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         conversations={conversations}
-        activeConversationId={activeConversationId}
+        activeConversationId={activeConversation?.id || ''}
         onSelectConversation={(id) => {
           setActiveConversationId(id);
           setActiveView('chat');
         }}
         onNewSimulation={() => {
           setActiveView('chat');
-          setActiveConversationId('');
         }}
         activeView={activeView}
         onSelectView={setActiveView}
         settings={settings}
         pendingCount={pendingReviewCount}
-        isDeviceConnected={isDeviceConnected}
+        isDeviceConnected={Boolean(connectedDevice)}
         onOpenPhoneLink={() => setIsPhoneModalOpen(true)}
       />
 
-      {/* Main Gemini View Area (offset when sidebar open on desktop) */}
-      <div className={`flex-1 flex flex-col min-w-0 transition-all duration-200 ease-in-out ${
-        isSidebarOpen ? 'lg:pl-72' : 'lg:pl-0'
-      }`}>
-        {/* Gemini Top Header */}
+      {/* 2. Main Content Canvas */}
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden lg:pl-72">
+        {/* Top Header */}
         <GeminiHeader
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
           settings={settings}
-          onUpdateSettings={(newSettings) => setSettings((s) => ({ ...s, ...newSettings }))}
+          onUpdateSettings={handleUpdateSettings}
           smsCount={smsCount}
           waCount={waCount}
           autoSentCount={autoSentCount}
-          isDeviceConnected={isDeviceConnected}
+          isDeviceConnected={Boolean(connectedDevice)}
           onOpenPhoneLink={() => setIsPhoneModalOpen(true)}
         />
 
-        {/* View Content Switcher */}
+        {/* Global Dispatch & AI Engine Status Ribbon */}
+        <div className="bg-[#18191a] border-b border-[#282a2c] px-4 py-1.5 text-xs flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-[#8e918f]">
+            <span className="flex items-center gap-1">
+              <span className={`w-2 h-2 rounded-full ${connectedDevice ? 'bg-[#34a853]' : 'bg-[#fbbc04]'}`} />
+              <span className="font-medium text-[#c4c7c5]">
+                {connectedDevice ? `Bridge: ${connectedDevice.name}` : 'Bridge: Awaiting Android Link'}
+              </span>
+            </span>
+            <span aria-hidden="true">·</span>
+            <span className="flex items-center gap-1 font-mono text-[11px] text-[#a8c7fa]">
+              <Sparkles className="w-3 h-3" />
+              <span>{geminiActive ? 'Gemini 3.8 Flash Active' : 'Deterministic Safety Safeguard Active'}</span>
+            </span>
+          </div>
+
+          {/* Pending Dispatches Waiting for Device ACK Banner */}
+          {pendingDispatches.length > 0 && (
+            <div className="flex items-center gap-2 bg-[#fbbc04]/10 border border-[#fbbc04]/30 px-2.5 py-0.5 rounded-full text-[11px] text-[#fdd663]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#fbbc04] animate-ping" />
+              <span className="font-semibold">
+                {pendingDispatches.length} Outbound queued for device
+              </span>
+              <button
+                onClick={() => handleSimulateDeviceAck(pendingDispatches[0].id)}
+                className="ml-1 text-[10px] bg-[#fbbc04]/20 hover:bg-[#fbbc04]/30 px-2 py-0.5 rounded-full font-bold underline transition-colors"
+                title="Simulate device confirmation for testing"
+              >
+                Confirm Dispatch
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* View Switcher Container */}
         <main className="flex-1 flex flex-col min-h-0 overflow-y-auto">
           {activeView === 'chat' && (
             <div className="flex-1 flex flex-col min-h-0">
@@ -456,35 +385,28 @@ export default function App() {
                 settings={settings}
                 onApproveReply={handleApproveReply}
                 onRejectReply={handleRejectReply}
-                onRegenerateReply={(convId, st) => setSettings((s) => ({ ...s, communicationStyle: st }))}
+                onRegenerateReply={() => {}}
                 onRunQuickPrompt={handleRunQuickPrompt}
+                onSimulateDeviceAck={handleSimulateDeviceAck}
               />
+
+              {/* Floating Bottom Composer */}
               <GeminiComposer
                 contacts={contacts}
                 onSendMessage={handleComposerSend}
-                disabled={settings.emergencyStop}
-                lastMessageText={
-                  activeConversation?.messages
-                    .slice()
-                    .reverse()
-                    .find((m) => m.senderType === 'contact')?.body
-                }
-                lastMessageCategory={
-                  activeConversation?.messages
-                    .slice()
-                    .reverse()
-                    .find((m) => m.senderType === 'contact')?.category
-                }
+                disabled={settings.emergencyStop || isSyncing}
+                lastMessageText={activeConversation?.lastMessage || ''}
+                lastMessageCategory={activeConversation?.messages[activeConversation.messages.length - 1]?.category}
               />
             </div>
           )}
 
           {activeView === 'scenarios' && (
-            <div className="p-4 sm:p-6 flex-1">
+            <div className="p-4 sm:p-6 overflow-y-auto">
               <ScenariosView
                 contacts={contacts}
                 settings={settings}
-                onUpdateSettings={(newSettings) => setSettings((s) => ({ ...s, ...newSettings }))}
+                onUpdateSettings={handleUpdateSettings}
                 onExecutePipeline={handleExecutePipeline}
                 onApplyPipelineResultToConversation={handleApplyPipelineResultToConversation}
               />
@@ -492,38 +414,42 @@ export default function App() {
           )}
 
           {activeView === 'settings' && (
-            <div className="p-4 sm:p-6 flex-1">
+            <div className="p-4 sm:p-6 overflow-y-auto">
               <SettingsView
                 settings={settings}
                 contacts={contacts}
-                onUpdateSettings={(newSettings) => setSettings((s) => ({ ...s, ...newSettings }))}
-                onUpdateContactPermission={(id, perm) => {
-                  setContacts((prev) => prev.map((c) => (c.id === id ? { ...c, isPermittedForAuto: perm } : c)));
-                }}
-                onAddContact={(contactData) => {
-                  setContacts((prev) => [...prev, { ...contactData, id: `contact-${Date.now()}` }]);
-                }}
+                onUpdateSettings={handleUpdateSettings}
+                onUpdateContactPermission={handleUpdateContactPermission}
+                onAddContact={handleAddContact}
                 onClearAllData={handleClearAllData}
               />
             </div>
           )}
 
           {activeView === 'activity' && (
-            <div className="p-4 sm:p-6 flex-1">
-              <ActivityLogView
-                logs={auditLogs}
-                onClearLogs={() => setAuditLogs([])}
+            <div className="p-4 sm:p-6 overflow-y-auto">
+              <ActivityLogView 
+                logs={auditLogs} 
+                onClearLogs={handleClearAllData}
               />
             </div>
           )}
 
           {activeView === 'architecture' && (
-            <div className="p-4 sm:p-6 flex-1">
+            <div className="p-4 sm:p-6 overflow-y-auto">
               <ArchitectureView />
             </div>
           )}
         </main>
       </div>
+
+      {/* 3. Real Phone Link Modal */}
+      <PhoneLinkModal
+        isOpen={isPhoneModalOpen}
+        onClose={() => setIsPhoneModalOpen(false)}
+        connectedDevice={connectedDevice}
+        onRefreshState={fetchBackendState}
+      />
     </div>
   );
 }
